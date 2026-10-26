@@ -26,7 +26,19 @@ const { createEngine } = require('./engines');
       answer.sources.forEach((s, i) => console.log(`  ${i + 1}. ${s.title}${s.url ? ` - ${s.url}` : ''}`));
     }
   } catch (e) {
-    console.error(`\nHata: ${e.message}`);
+    if (/RATE_LIMIT/.test(e.message)) {
+      console.error("\nGoogle bu IP'yi gecici olarak engelledi.\n");
+      console.error(e.message.replace(/^RATE_LIMIT:\s*/, ''));
+      console.error('\nNe yapmali:');
+      console.error('  1. 5-10 dakika bekle (engel kendiliginden kalkar)');
+      console.error('  2. Google hesabinla giris yap:  npm run login  ->  npm run export-cookies');
+      console.error('  3. Istekleri seyrekle:  $env:AIM_MIN_INTERVAL_MS = "5000"');
+    } else if (/THROTTLED/.test(e.message)) {
+      console.error('\nGoogle AI Mode cevabini gondermedi (hiz siniri).\n');
+      console.error(e.message.replace(/^THROTTLED:\s*/, ''));
+    } else {
+      console.error(`\nHata: ${e.message}`);
+    }
     process.exitCode = 1;
   } finally {
     if (typeof engine.close === 'function') await engine.close();

@@ -38,6 +38,9 @@ module.exports = {
   // Google cok hizli ardisik isteklerde AI Mode'u gondermeyi birakiyor.
   minIntervalMs: Number(process.env.AIM_MIN_INTERVAL_MS || 1500),
 
+  // 429 / captcha sonrasi ne kadar istek atilmayacak (ms). Varsayilan 5 dk.
+  blockCooldownMs: Number(process.env.AIM_BLOCK_COOLDOWN_MS || 5 * 60 * 1000),
+
   headless: process.env.AIM_HEADLESS === '1',
   chromeChannel: process.env.AIM_CHANNEL || 'chrome',
   locale: process.env.AIM_LOCALE || 'tr-TR',

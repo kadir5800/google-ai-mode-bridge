@@ -31,6 +31,7 @@ class HttpEngine {
     this.lastRequestAt = 0;
     this.queue = Promise.resolve();
     this.pending = 0;
+    this.blockedUntil = 0;
   }
 
   get busy() {
@@ -321,6 +322,16 @@ class HttpEngine {
   async _ask(query, opts = {}) {
     const onDelta = typeof opts.onDelta === 'function' ? opts.onDelta : null;
     const t0 = Date.now();
+
+    // Onceki 429/captcha sonrasi bekleme penceresi hala gecerliyse
+    // istek atmadan hemen hata ver: ayni IP'yi dovup engeli uzatmayalim.
+    if (this.blockedUntil && Date.now() < this.blockedUntil) {
+      const kalan = Math.ceil((this.blockedUntil - Date.now()) / 1000);
+      throw new Error(
+        `RATE_LIMIT: Google bu IP'yi gecici olarak engelledi. ${kalan} saniye daha bekle.`,
+      );
+    }
+
     const encoded = encodeURIComponent(query);
     const searchUrl = `https://www.google.com/search?q=${encoded}&udm=50&hl=tr`;
 
@@ -332,17 +343,36 @@ class HttpEngine {
       'sec-fetch-site': 'none',
     });
 
+    // 429 = Google bu IP'yi gecici olarak engelledi (captcha sayfasi doner).
+    // Cerez yenilemek cozmez; beklemek gerekir. Durumu kaydedip kisa devre
+    // yapiyoruz ki ayni IP'yi dovup engeli uzatmayalim.
+    if (first.status === 429) {
+      this.blockedUntil = Date.now() + cfg.blockCooldownMs;
+      throw new Error(
+        `RATE_LIMIT: Google bu IP'yi gecici olarak engelledi (HTTP 429). ` +
+          `Yaklasik ${Math.round(cfg.blockCooldownMs / 60000)} dakika beklemek gerekiyor. ` +
+          'Cerez yenilemek cozmez. Kalici cozum: Google hesabiyla giris (npm run login && npm run export-cookies) ' +
+          've daha seyrek istek. Chromium yolu bu durumda genelde de calismaz.',
+      );
+    }
+
     if (first.status !== 200) {
-      throw new Error(`HTTP ${first.status} (arama sayfasi). ${this.reloginHint()}`);
-    }    // Gercek engel isaretleri. NOT: "captcha" / "/sorry/index" gibi metinler
+      throw new Error(`HTTP ${first.status} (arama sayfasi).`);
+    }
+
+    // Gercek engel isaretleri. NOT: "captcha" / "/sorry/index" gibi metinler
     // sayfadaki JS kaynaginda da geciyor; yalnizca engel sayfasina ozgu
     // yapilara bakilir.
     if (
       /<form[^>]+id="captcha-form"/i.test(first.body) ||
-      /<title>\s*\/sorry\//i.test(first.body) ||
-      /id="captcha-form"[\s\S]{0,200}recaptcha/i.test(first.body)
+      /<body[^>]*onload="[^"]*captcha/i.test(first.body)
     ) {
-      throw new Error('BLOCKED: Google captcha. Bir sure bekleyip tekrar dene.');
+      this.blockedUntil = Date.now() + cfg.blockCooldownMs;
+      throw new Error(
+        `RATE_LIMIT: Google captcha dogrulamasi istedi. Yaklasik ` +
+          `${Math.round(cfg.blockCooldownMs / 60000)} dakika beklemek gerekiyor. ` +
+          'Tarayici ile cozmek icin: npm run login',
+      );
     }
 
     const b = HttpEngine.bootstrap(first.body);
