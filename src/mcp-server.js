@@ -17,11 +17,11 @@ const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio
 const { z } = require('zod');
 
 const cfg = require('./config');
-const { GoogleAiModeEngine } = require('./engine');
+const { createEngine } = require('./engines');
 
 const log = (...a) => process.stderr.write(`[ai-mode-mcp] ${a.join(' ')}\n`);
 
-const engine = new GoogleAiModeEngine();
+const engine = createEngine();
 
 const server = new McpServer({
   name: 'google-ai-mode',
@@ -77,7 +77,7 @@ server.registerTool(
     } catch (e) {
       log(`hata: ${e.message}`);
       const friendly = /BLOCKED/.test(e.message)
-        ? 'Google bu istegi engelledi (captcha/dogrulama). `npm run login` ile tarayiciyi acip elle dogrulama yapmasi gerekiyor.'
+        ? 'Google bu istegi engelledi (captcha/dogrulama). Bir sure bekleyip tekrar dene.'
         : e.message;
       return {
         isError: true,
@@ -92,32 +92,61 @@ server.registerTool(
   {
     title: 'AI Mode oturum durumunu kontrol et',
     description:
-      'Google AI Mode tarayici oturumunun calisip calismadigini kontrol eder. ' +
+      'Google AI Mode oturumunun calisip calismadigini kontrol eder. ' +
       'Aramalar basarisiz oldugunda teshis icin kullan.',
     inputSchema: {},
   },
   async () => {
+    if (cfg.engine === 'browser') {
+      try {
+        const page = await engine.ensureBrowser();
+        const state = await page.evaluate(() => ({
+          url: location.href,
+          loggedIn: !!document.querySelector('a[aria-label*="Google Hesab"], img[aria-label*="profil" i]'),
+        }));
+        return {
+          content: [
+            {
+              type: 'text',
+              text:
+                `Motor: browser (Chromium)\nTarayici calisiyor.\nProfil: ${cfg.profileDir}\n` +
+                `Google girisi: ${state.loggedIn ? 'evet' : 'hayir (gerekli olmayabilir)'}\n` +
+                'Sorun varsa terminalde `npm run login` calistir.',
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Tarayici baslatilamadi: ${e.message}` }],
+        };
+      }
+    }
+
+    // Tarayicisiz motor: cerez dosyasi + canli istek testi
     try {
-      const page = await engine.ensureBrowser();
-      const state = await page.evaluate(() => ({
-        url: location.href,
-        loggedIn: !!document.querySelector('a[aria-label*="Google Hesab"], img[aria-label*="profil" i]'),
-      }));
+      const t0 = Date.now();
+      const answer = await engine.ask('merhaba');
       return {
         content: [
           {
             type: 'text',
             text:
-              `Tarayici calisiyor.\nProfil: ${cfg.profileDir}\n` +
-              `Google girisi: ${state.loggedIn ? 'evet' : 'hayir (gerekli olmayabilir)'}\n` +
-              'Sorun varsa terminalde `npm run login` calistir.',
+              `Motor: http (tarayicisiz)\nCerez dosyasi: ${engine.cookieFile()}\n` +
+              `Test istegi: ${Date.now() - t0}ms, ${answer.text.length} karakter\n` +
+              'Durum: calisiyor',
           },
         ],
       };
     } catch (e) {
       return {
         isError: true,
-        content: [{ type: 'text', text: `Tarayici baslatilamadi: ${e.message}` }],
+        content: [
+          {
+            type: 'text',
+            text: `Tarayicisiz motor basarisiz: ${e.message}\nCerezleri yenile: npm run export-cookies`,
+          },
+        ],
       };
     }
   },

@@ -2,7 +2,7 @@
 
 const { chromium } = require('playwright');
 const cfg = require('./config');
-const { cleanClipboard } = require('./clean');
+const { cleanClipboard, cleanLiveText } = require('./clean');
 
 /**
  * Acik motor ornekleri. Node sonlanirken tarayicilari kapatmak icin tutulur;
@@ -140,11 +140,12 @@ class GoogleAiModeEngine {
     this.page = null;
   }
 
-  async ask(query) {
-    return this.enqueue(() => this._ask(query));
+  async ask(query, opts = {}) {
+    const onDelta = typeof opts.onDelta === 'function' ? opts.onDelta : null;
+    return this.enqueue(() => this._ask(query, false, onDelta));
   }
 
-  async _ask(query, isRetry = false) {
+  async _ask(query, isRetry = false, onDelta = null) {
     const page = await this.ensureBrowser();
     const lang = cfg.locale.split('-')[0];
     const url = `https://www.google.com/search?q=${encodeURIComponent(query)}&udm=50&hl=${lang}`;
@@ -165,7 +166,7 @@ class GoogleAiModeEngine {
     }
 
     let mode = 'ai-mode';
-    let ready = await this.waitForAnswer(page, cfg.answerTimeout);
+    let ready = await this.waitForAnswer(page, cfg.answerTimeout, onDelta);
 
     // AI Mode cevabi gelmediyse sayfadaki AI Overview'a bak (varsa hemen doner)
     if (!ready) {
@@ -175,7 +176,7 @@ class GoogleAiModeEngine {
 
     // Hala yok: headless engeli olabilir, gorunur pencerede bir kez daha dene
     if (!ready && !isRetry && (await this.fallbackToHeaded())) {
-      return this._ask(query, true);
+      return this._ask(query, true, onDelta);
     }
 
     if (!ready) {
@@ -282,13 +283,64 @@ class GoogleAiModeEngine {
     return false;
   }
 
-  /** Cevap blogu hazir mi? data-complete + metin uzunlugu kontrol eder. */
-  async waitForAnswer(page, timeoutMs) {
+  /**
+   * Cevap blogu hazir mi? data-complete + metin uzunlugu kontrol eder.
+   *
+   * onDelta verilirse cevap YAZILIRKEN canli akitilir: her turda DOM'dan
+   * okunan temiz metnin, daha once gonderilmemis kuyrugu iletilir. Boylece
+   * "Kopyala"ya basip sonucu tek seferde almak yerine kullanici cevabi
+   * olustugu anda gorur.
+   */
+  async waitForAnswer(page, timeoutMs, onDelta = null) {
     const deadline = Date.now() + timeoutMs;
     let lastLen = 0;
     let lastText = '';
     let stableSince = Date.now();
     const minLen = 120; // daha kisa metin genelde yukleniyor demektir
+
+    // Canli akis durumu
+    let sentRawLen = 0; // ham metnin islenmis uzunlugu
+    let snapshot = ''; // son okunan HAM metin
+    const livePoll = onDelta ? Math.min(cfg.pollMs, 150) : cfg.pollMs;
+
+    /**
+     * Ham DOM metninin YALNIZCA yeni eklenen bolumunu temizleyip iletir.
+     *
+     * Neden delta yerine "yeni bolge": temizlik (cleanLiveText) bazi satirlari
+     * atabildigi icin temizlenmis metin uzerinden delta hesaplamak mükerrer
+     * veya eksik gonderime yol aciyor. Ham metin ise sona eklenerek buyudugu
+     * icin islenmis uzunlugu tutmak yeterli ve birebir.
+     */
+    const emitLive = (rawNow) => {
+      if (!onDelta || !rawNow) return;
+      if (rawNow.length < sentRawLen) {
+        // Google metni bastan yazdi (nadir). Kaldigimiz yerden devam et.
+        sentRawLen = 0;
+      }
+      let fresh = rawNow.slice(sentRawLen);
+      if (!fresh) return;
+
+      // Yarim kelime gostermemek icin son bosluk/yeni satirdan kes
+      const cut = Math.max(fresh.lastIndexOf(' '), fresh.lastIndexOf('\n'));
+      if (cut <= 0) return;
+      fresh = fresh.slice(0, cut + 1);
+
+      const chunk = cleanLiveText(fresh);
+      sentRawLen += fresh.length;
+      if (!chunk) return;
+      onDelta(chunk.endsWith('\n') ? chunk : `${chunk} `);
+    };
+
+    const flushLive = (rawFinal) => {
+      if (!onDelta) return;
+      const rest = cleanLiveText((rawFinal || snapshot).slice(sentRawLen));
+      if (!rest.trim()) return;
+      sentRawLen = (rawFinal || snapshot).length;
+      onDelta(rest);
+    };
+
+    // Ilk okumayi erken yap: cevap yazilmaya baslar baslamaz akit
+    await page.waitForTimeout(250);
 
     while (Date.now() < deadline) {
       const st = await page
@@ -297,7 +349,7 @@ class GoogleAiModeEngine {
             document.querySelector('#aim-chrome-initial-inline-async-container') ||
             document.querySelector('[data-attrid*="SGE"]') ||
             document.querySelector('block-component');
-          if (!root) return { len: 0, complete: false, text: '' };
+          if (!root) return { len: 0, complete: false, text: '', busy: false };
           const text = (root.innerText || '').trim();
           // Google cevap blogu bitince data-complete="true" isaretler
           const marks = root.querySelectorAll('[data-complete]');
@@ -309,6 +361,11 @@ class GoogleAiModeEngine {
         })
         .catch(() => ({ len: 0, complete: false, text: '', busy: false }));
 
+      if (st.text && st.text !== snapshot) {
+        snapshot = st.text;
+        emitLive(snapshot);
+      }
+
       if (st.text !== lastText) {
         lastText = st.text;
         lastLen = st.len;
@@ -316,12 +373,19 @@ class GoogleAiModeEngine {
       }
 
       const stableFor = Date.now() - stableSince;
-      if (lastLen >= minLen && st.complete && !st.busy && stableFor >= cfg.stableMs) return true;
+      if (lastLen >= minLen && st.complete && !st.busy && stableFor >= cfg.stableMs) {
+        flushLive(snapshot);
+        return true;
+      }
       // data-complete hic gorunmuyorsa: uzun ve uzun suredir sabit metin yeterli
-      if (lastLen >= minLen * 2 && stableFor >= cfg.stableMs * 3) return true;
+      if (lastLen >= minLen * 2 && stableFor >= cfg.stableMs * 3) {
+        flushLive(snapshot);
+        return true;
+      }
 
-      await page.waitForTimeout(cfg.pollMs);
+      await page.waitForTimeout(livePoll);
     }
+    flushLive(snapshot);
     return lastLen >= minLen;
   }
 

@@ -3,10 +3,10 @@
 const http = require('http');
 const crypto = require('crypto');
 const cfg = require('./config');
-const { GoogleAiModeEngine } = require('./engine');
+const { createEngine } = require('./engines');
 const { buildQuery, parseToolCalls } = require('./prompt');
 
-const engine = new GoogleAiModeEngine();
+const engine = createEngine();
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -84,10 +84,43 @@ async function handleChat(req, res, body) {
     return json(res, 400, { error: { message: 'Bos istek: mesaj yok.', type: 'invalid_request_error' } });
   }
 
+  const chatId = newId('chatcmpl');
+  const created = Math.floor(Date.now() / 1000);
+
+  // Arac cagrisi modunda tam metin gerekir (akis anlamsiz olur).
+  // Arac yoksa cevap YAZILIRKEN anlik akitilir.
+  const live = Boolean(body.stream) && tools.length === 0;
+
+  let send = null;
+  let chunk = null;
+  let streamStarted = false;
+
+  if (body.stream) {
+    res.writeHead(200, {
+      ...CORS,
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    streamStarted = true;
+    send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    const base = { id: chatId, object: 'chat.completion.chunk', created, model };
+    chunk = (delta, finish) =>
+      send({ ...base, choices: [{ index: 0, delta, finish_reason: finish ?? null }] });
+    chunk({ role: 'assistant', content: '' });
+  }
+
   let answer;
   try {
-    answer = await engine.ask(query);
+    answer = await engine.ask(query, live ? { onDelta: (d) => chunk({ content: d }) } : {});
   } catch (e) {
+    if (streamStarted) {
+      chunk({ content: `\n[Hata: ${e.message}]` });
+      chunk({}, 'stop');
+      res.write('data: [DONE]\n\n');
+      return res.end();
+    }
     return json(res, 502, {
       error: {
         message: e.message,
@@ -98,16 +131,14 @@ async function handleChat(req, res, body) {
   }
 
   const parsed = parseToolCalls(answer.text, tools);
-  const chatId = newId('chatcmpl');
-  const created = Math.floor(Date.now() / 1000);
-
-  const message = {
-    role: 'assistant',
-    content: parsed.toolCalls.length ? parsed.content || null : formatContent(answer),
-  };
-  if (parsed.toolCalls.length) message.tool_calls = parsed.toolCalls;
 
   if (!body.stream) {
+    const message = {
+      role: 'assistant',
+      content: parsed.toolCalls.length ? parsed.content || null : formatContent(answer),
+    };
+    if (parsed.toolCalls.length) message.tool_calls = parsed.toolCalls;
+
     return json(res, 200, {
       id: chatId,
       object: 'chat.completion',
@@ -118,22 +149,7 @@ async function handleChat(req, res, body) {
     });
   }
 
-  // ---- SSE streaming ----
-  res.writeHead(200, {
-    ...CORS,
-    'Content-Type': 'text/event-stream; charset=utf-8',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no',
-  });
-
-  const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
-  const base = { id: chatId, object: 'chat.completion.chunk', created, model };
-  const chunk = (delta, finish) =>
-    send({ ...base, choices: [{ index: 0, delta, finish_reason: finish ?? null }] });
-
-  chunk({ role: 'assistant', content: '' });
-
+  // ---- SSE streaming (basliklar zaten gonderildi) ----
   if (parsed.toolCalls.length) {
     chunk({
       tool_calls: parsed.toolCalls.map((tc, i) => ({
@@ -147,12 +163,22 @@ async function handleChat(req, res, body) {
       chunk({ tool_calls: [{ index: i, function: { arguments: parsed.toolCalls[i].function.arguments } }] });
     }
     chunk({}, 'tool_calls');
-  } else {
+  } else if (!live) {
     const full = formatContent(answer);
     const parts = full.match(/[\s\S]{1,24}/g) || [full];
     for (const p of parts) {
       chunk({ content: p });
       await new Promise((r) => setTimeout(r, 12));
+    }
+    chunk({}, 'stop');
+  } else {
+    // Cevap zaten canli akitildi; varsa kaynaklari ekle
+    if (cfg.includeSources && answer.sources && answer.sources.length) {
+      let refs = '\n\n---\nKaynaklar:\n';
+      answer.sources.forEach((s, i) => {
+        refs += `${i + 1}. [${s.title}](${s.url})\n`;
+      });
+      chunk({ content: refs });
     }
     chunk({}, 'stop');
   }

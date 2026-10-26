@@ -114,6 +114,9 @@ const TOOL_LIST = Object.entries(TOOLS)
  *  - "Sen bir ajansin..."           -> reddediyor
  *  - "Sinav sorusu: bir ajan ..."   -> DOGRU FORMATI URETIYOR  ✅
  *
+ * Ek olarak: AI Mode COK SATIRLI sorgularda bos cevap donuyor. Prompt bu
+ * yuzden tek satira indirilir (buildPrompt sonunda).
+ *
  * Bu yuzden prompt bir SINAV SORUSU gibi cercevelenir: AI Mode kimlik
  * dayatmasini kabul etmiyor ama "bu senaryoda ajan ne yazardı" sorusuna
  * formatli cevap veriyor.
@@ -147,7 +150,7 @@ function buildPrompt({ task, history, observation }) {
     }
   }
 
-  return parts.join('\n');
+  return parts.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 /** Cevaptan arac cagrisini ayiklar. */

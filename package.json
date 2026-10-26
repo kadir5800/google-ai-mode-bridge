@@ -9,7 +9,10 @@
     "start": "node src/server.js",
     "ask": "node src/cli.js",
     "login": "node src/login.js",
-    "debug": "node src/debug-dump.js"
+    "export-cookies": "node src/export-cookies.js",
+    "debug": "node src/debug-dump.js",
+    "agent": "node src/agent.js",
+    "test": "node --test tests/prompt.test.js tests/http-engine.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",

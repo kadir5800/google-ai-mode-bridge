@@ -26,6 +26,18 @@ module.exports = {
   profileDir:
     process.env.AIM_PROFILE_DIR ||
     path.join(process.env.LOCALAPPDATA || require('os').tmpdir(), 'google-ai-mode-profile'),
+
+  // Tarayicisiz (HTTP) motor icin veri dizini: cookies.json burada tutulur
+  dataDir: process.env.AIM_DATA_DIR || ROOT,
+
+  // Motor: "hybrid" (varsayilan: once HTTP, gerekirse Chromium),
+  //        "http" (yalnizca tarayicisiz), "browser" (yalnizca Chromium)
+  engine: process.env.AIM_ENGINE || 'hybrid',
+
+  // Tarayicisiz motorda istekler arasi minimum bekleme (ms).
+  // Google cok hizli ardisik isteklerde AI Mode'u gondermeyi birakiyor.
+  minIntervalMs: Number(process.env.AIM_MIN_INTERVAL_MS || 1500),
+
   headless: process.env.AIM_HEADLESS === '1',
   chromeChannel: process.env.AIM_CHANNEL || 'chrome',
   locale: process.env.AIM_LOCALE || 'tr-TR',

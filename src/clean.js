@@ -115,4 +115,46 @@ function cleanClipboard(raw) {
   return { text, gotoRefs };
 }
 
-module.exports = { cleanClipboard, extractGotoRefs, stripLinks };
+/**
+ * CANLI akis icin temizlik.
+ *
+ * Canli metin DOM'dan gelir (panodan degil), bu yuzden arayuz kalintilari
+ * daha fazladir: "Dusunuyor...", "Kopyala", geri bildirim satirlari, kaynak
+ * kartlari. Ayrica Google cevabi yazarken ayni satiri yeniden yazabiliyor;
+ * tekrarlanan satirlar tekilleştirilir.
+ */
+const LIVE_JUNK = [
+  /^kopyala$/i, /^copy$/i, /^metni kopyala$/i, /^copy text$/i,
+  /^panoya kopyaland[ıi]?/i, /^kopyaland[ıi]$/i,
+  /^d[üu][şs][üu]n[üu]yor/i, /^thinking/i, /^aran[ıi]yor/i, /^searching/i,
+  /^show more$/i, /^daha fazla g[öo]ster$/i, /^t[üu]m[üu]n[üu] g[öo]ster$/i,
+  /^kaynaklar$|^sources$/i, /^payla[şs]$|^share$/i,
+  /^iyi yan[ıi]t$/i, /^k[öo]t[üu] yan[ıi]t$/i,
+  /^ai mode$|^ai modu$/i, /i[çc]in ai modu yan[ıi]t[ıi]/i,
+  /^hata yapabildi/i, /verdi[ğg]i yan[ıi]tlar[ıi] do[ğg]rula/i,
+  /^yapay zek[âa] destekli/i, /^g[öo]rsel/i,
+  /^google, geri bildirim/i, /^yasal sorunlar i[çc]in/i,
+  /^bu herkese a[çc][ıi]k ba[ğg]lant[ıi]/i, /^bu sohbetin bir kopyas[ıi]/i,
+  /^_(setImageSrc|data:image)/i, /base64,/i,
+];
+
+function cleanLiveText(raw) {
+  if (!raw) return '';
+  const lines = String(raw).replace(/\u00a0/g, ' ').split('\n');
+  const kept = [];
+  for (const ln of lines) {
+    const t = ln.replace(/[ \t]+/g, ' ').trimEnd();
+    const s = t.trim();
+    if (!s) {
+      if (kept.length && kept[kept.length - 1] !== '') kept.push('');
+      continue;
+    }
+    if (LIVE_JUNK.some((re) => re.test(s))) continue;
+    // Ayni satir tekrar tekrar yaziliyorsa (streaming yeniden cizimi) tek tut
+    if (kept.length && kept[kept.length - 1].trim() === s) continue;
+    kept.push(t);
+  }
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+module.exports = { cleanClipboard, extractGotoRefs, stripLinks, cleanLiveText };

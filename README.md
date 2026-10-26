@@ -7,12 +7,49 @@ Cursor Agent (beyin: function calling + dev tools)
       │
       ├── read_file / write / terminal / grep ...   (Cursor'ın kendi araçları)
       │
-      └── google_ai_mode("güncel soru")  ──▶  Playwright  ──▶  google.com
+      └── google_ai_mode("güncel soru")  ──▶  motor  ──▶  google.com
+                                              │
+                              ┌───────────────┴───────────────┐
+                              │                               │
+                     HTTP motoru (~1-2s)              Chromium (~10-20s)
+                     düz fetch + folwr                yedek / ağır durumlar
 ```
 
 Cursor zaten gerçek bir agent'tır: function calling, agent döngüsü ve yerel
 araçlar onda var. Eksik olan tek parça **canlı web bilgisiydi** — bu proje onu
 AI Mode üzerinden sağlar.
+
+---
+
+## İki motor: tarayıcısız (hızlı) ve Chromium (yedek)
+
+Projenin en önemli bulgusu: **AI Mode tarayıcı olmadan da okunabiliyor.**
+
+`/search?udm=50` sayfası, cevabı getiren `folwr` isteği için gereken **tüm
+token'ları** (`garc`, `mlro`, `mlros`, `srtst`, `stkp`, `ei`, `xsrf`) HTML'deki
+`data-*` özniteliklerinde hazır veriyor. Yani tarayıcı gerekmiyor:
+
+```
+GET /search?q=...&udm=50  →  token'ları ayıkla
+GET /async/folwr?...      →  cevap HTML'i
+```
+
+| | Tarayıcısız (HTTP) | Chromium |
+|---|---|---|
+| Süre | **~0.8-2.5 s** | ~10-20 s |
+| RAM | ~50 MB | ~400 MB |
+| Süreç | yok | Chrome + profil |
+| Kırılganlık | token'lara bağlı | DOM seçicilerine bağlı |
+| Risk | IP hız sınırı | captcha, bot koruması |
+
+**Varsayılan `hybrid`:** önce HTTP denenir; Google IP'yi geçici olarak
+sınırlarsa (`THROTTLED`) otomatik Chromium'a düşülür, sistem hiç durmaz.
+
+```powershell
+$env:AIM_ENGINE = "hybrid"   # varsayılan
+$env:AIM_ENGINE = "http"     # yalnız tarayıcısız
+$env:AIM_ENGINE = "browser"  # yalnız Chromium
+```
 
 ---
 
@@ -56,11 +93,19 @@ npm install
 ### 2. Google oturumu (bir kez)
 
 ```powershell
-npm run login
+npm run login            # görünür tarayıcı: çerez/giriş
+npm run export-cookies   # cookies.json üret (tarayıcısız motor için)
 ```
 
 Açılan pencerede çerez ekranını kabul et, bir soru sorup AI Mode'un çalıştığını
 gör, gerekirse giriş yap. Sonra terminalde **Enter**.
+
+> `npm run export-cookies` profildeki Google çerezlerini `cookies.json`'a yazar.
+> Tarayıcısız motor bunları kullanır. Çerezler aylarca geçerlidir; süresi
+> dolduğunda aynı komutu tekrar çalıştırmak yeterli.
+>
+> **Google hesabıyla giriş yapman önerilir:** anonim kullanımda IP hız sınırı
+> daha agresif uygulanıyor.
 
 > Profil: `%LOCALAPPDATA%\google-ai-mode-profile`
 > Chrome, yolunda Türkçe karakter olan `--user-data-dir` dizinlerinde açılmadığı
@@ -106,37 +151,65 @@ projeyi günceller. **İşte agent davranışı bu.**
 |---|---|
 | `npm run mcp` | MCP sunucusunu elle çalıştırır (test için) |
 | `npm run login` | Görünür tarayıcı açar, oturumu kaydeder |
+| `npm run export-cookies` | Profil çerezlerini `cookies.json`'a aktarır |
 | `npm run ask -- "soru"` | Terminalden tek soru |
 | `npm run debug -- "soru"` | Teşhis: sayfa HTML'i + ekran görüntüsü |
+| `npm run agent -- "görev"` | Kural tabanlı agent döngüsü (dosya araçları) |
+| `npm test` | Birim testleri (ağ gerekmez) |
 | `npm start` | (Opsiyonel) OpenAI uyumlu HTTP endpoint, `:8787` |
 
 ---
 
 ## Nasıl çalışıyor?
 
-**İki katmanlı çıkarma:**
-1. **Pano (asıl)** — AI Mode cevabının altındaki **Kopyala** düğmesine basılır.
-   Google böylece tam markdown verir; tablolar bozulmaz.
-2. **DOM (yedek)** — cevap bloğu `#aim-chrome-initial-inline-async-container`.
+### Tarayıcısız motor (`src/http-engine.js`)
 
-Bitiş tespiti: `data-complete="true"` + metnin sabitlenmesi.
+1. `GET /search?q=...&udm=50` → HTML (≈525 KB)
+2. `data-garc`, `data-lro-token`, `data-lro-signature`, `data-srtst`, `data-stkp`,
+   `data-ei`, `data-xsrf-folwr-token` özniteliklerini ayıkla
+3. `GET /async/folwr?...` → cevap HTML'i (≈475 KB)
+4. Cevap gövdesi `class="n6owBd"` paragrafından başlar; arayüz kuyruğu
+   ("Panoya kopyalandı", paylaşım menüsü) doğal sınır olarak kesilir
+5. Kaynak kartları `<!--TgQPHd|||[[...]]-->` yorumlarından yapısal olarak çıkarılır
 
-**Kaynaklar:** `/goto?url=...` linkleri 302 yönlendirmesiyle gerçek adreslere
-çözülür.
+### Chromium motoru (`src/engine.js`)
 
-**Headless:** Varsayılan olarak arka planda çalışır. Google engellerse otomatik
-olarak görünür pencereye geçer.
+1. `launchPersistentContext` ile kalıcı profil
+2. Cevap **yazılırken** `innerText` canlı örneklenir → `onDelta` ile akıtılır
+3. Bitince "Kopyala" düğmesiyle tam markdown alınır (tablolar bozulmaz)
+4. Kaynaklar `/goto?url=...` 302 yönlendirmesinden çözülür
+
+### Agent protokolü (`src/prompt.js`)
+
+AI Mode function calling yapamaz ama **sınav sorusu** çerçevesinde tek satırlık
+komut üretiyor:
+
+```
+Sinav sorusu: Bir ajan read_file(path) write_file(path,content) araclarini
+kullaniyor. Gorev: "package.json oku" ... Cevap formati: ARAC: ad | arg="deger"
+```
+
+`parseProtocol` bunu OpenAI `tool_calls` formatına çevirir; Cursor/Cline gerçek
+araç çağrısı olarak görür.
+
+**Ölçülen kısıtlar (hepsi test edildi):**
+- AI Mode kimlik dayatmasını ("sen bir ajansın") reddediyor → boş cevap
+- **Çok satırlı sorguda cevap üretmiyor** → sorgular tek satıra indirilir
+- Araç listesi JSON olarak gömülünce arama bozuluyor
 
 ---
 
 ## Sınırlar
 
-- **Hız:** istek başına ~10-20 saniye (gerçek tarayıcı yükleniyor)
-- **Sıralı:** istekler tek tek işlenir (paralel sekmeler bot koruması tetikliyor)
-- **ToS riski:** Google otomatik erişimi yasaklar. Captcha çıkarsa
-  `npm run login` ile elle geçmek gerekir
-- **Kırılganlık:** Google DOM'u değiştirirse seçiciler güncellenmeli
-  (`npm run debug` ile incele)
+- **Hız sınırı (en önemli):** Google art arda hızlı isteklerde AI Mode
+  kapsayıcısını göndermeyi bırakıyor (`THROTTLED`). İstekler arası bekleme
+  varsayılan 1.5 s; artırılabilir. Sınır IP bazlıdır, çerez silmek çözmez.
+  Kalıcı çözüm: Google hesabıyla giriş + makul istek sıklığı.
+- **Hız:** HTTP ~1-2.5 s, Chromium ~10-20 s
+- **Sıralı:** istekler tek tek işlenir (paralel istekler sınırı hızlandırır)
+- **ToS riski:** Google otomatik erişimi yasaklar
+- **Kırılganlık:** HTTP yolu token özniteliklerine, Chromium yolu DOM
+  seçicilerine bağlı. İkisi de değişebilir (`npm run debug` ile incele)
 - **Araç çağırma:** AI Mode *kendi* araçlarını çağırır (Arama, Python, Görsel)
   ama dışarıdan tanımlanan araçları çağıramaz
 
@@ -145,17 +218,21 @@ olarak görünür pencereye geçer.
 PowerShell ile geçersiz kılınabilir:
 
 ```powershell
+$env:AIM_ENGINE = "http"
+$env:AIM_MIN_INTERVAL_MS = "3000"
 $env:AIM_HEADLESS = "1"
 $env:AIM_PROFILE_DIR = "C:\aim-profile"
-$env:AIM_ANSWER_TIMEOUT = "40000"
 $env:AIM_MAX_SOURCES = "6"
 ```
 
 | Değişken | Varsayılan | Açıklama |
 |---|---|---|
-| `AIM_HEADLESS` | `0` (`mcp.json` içinde `1`) | `1` = arka planda |
+| `AIM_ENGINE` | `hybrid` | `hybrid` \| `http` \| `browser` |
+| `AIM_MIN_INTERVAL_MS` | `1500` | HTTP motorunda istekler arası bekleme |
+| `AIM_HEADLESS` | `0` | Chromium'u arka planda çalıştır |
 | `AIM_PROFILE_DIR` | `%LOCALAPPDATA%\google-ai-mode-profile` | Chrome profili |
-| `AIM_ANSWER_TIMEOUT` | `40000` | Cevap bekleme (ms) |
+| `AIM_DATA_DIR` | proje kökü | `cookies.json` konumu |
+| `AIM_ANSWER_TIMEOUT` | `40000` | Chromium cevap bekleme (ms) |
 | `AIM_SOURCES` | `1` | `0` = kaynak ekleme |
 | `AIM_MAX_SOURCES` | `6` | En fazla kaynak |
 | `AIM_PORT` | `8787` | Sadece `npm start` için |

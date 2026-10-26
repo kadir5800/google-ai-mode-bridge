@@ -3,3 +3,13 @@ debug/
 *.log
 .chrome-profile*/
 .env
+
+# Google oturum cerezleri - ASLA commit edilmemeli
+cookies.json
+*.cookies.json
+
+# Gecici teshis dosyalari
+probe-*
+dbg-*
+e2e-*
+sse-req.json
