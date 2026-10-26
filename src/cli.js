@@ -19,7 +19,8 @@ const { createEngine } = require('./engines');
     const t0 = Date.now();
     const answer = await engine.ask(query);
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
-    console.log(`\n[mod: ${answer.mode} | ${secs}s]\n`);
+    const mod = answer.mode === 'ai-mode' && secs > 10 ? 'ai-mode (yavas)' : answer.mode;
+    console.log(`\n[mod: ${mod} | ${secs}s]\n`);
     console.log(answer.text);
     if (answer.sources && answer.sources.length) {
       console.log('\nKaynaklar:');

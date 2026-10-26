@@ -14,9 +14,10 @@ const { HttpEngine } = require('./http-engine');
 const { GoogleAiModeEngine } = require('./engine');
 
 const FALLBACK_CODES = /THROTTLED|EMPTY:/;
-// RATE_LIMIT'te Chromium'a dusmek anlamsiz: engel IP bazli, tarayici da ayni
-// IP'yi kullanir. Bos yere Chrome acmayalim.
-const NO_FALLBACK_CODES = /RATE_LIMIT/;
+// RATE_LIMIT'te de Chromium'a dusulur: OLCULDU ki 429 engeli duz-fetch
+// parmak izine ozgu. Ayni IP'den gercek tarayici ile AI Mode calisiyor
+// (17s'de cevap alindi), HTTP yolu ise 429 donuyor.
+const ALSO_FALLBACK = /RATE_LIMIT/;
 
 class HybridEngine {
   constructor() {
@@ -33,12 +34,15 @@ class HybridEngine {
     try {
       return await this.http.ask(query, opts);
     } catch (e) {
-      if (NO_FALLBACK_CODES.test(e.message)) throw e;
-      if (!FALLBACK_CODES.test(e.message)) throw e;
+      if (!FALLBACK_CODES.test(e.message) && !ALSO_FALLBACK.test(e.message)) throw e;
       if (process.env.AIM_FALLBACK === 'none') throw e;
 
       this.fallbackUsed += 1;
-      process.stderr.write(`[hybrid] HTTP basarisiz (${e.message.slice(0, 60)}), Chromium'a geciliyor\n`);
+      if (process.env.AIM_DEBUG) {
+        process.stderr.write(
+          `[hybrid] HTTP basarisiz (${e.message.slice(0, 60)}), Chromium'a geciliyor\n`,
+        );
+      }
 
       const answer = await this.browser.ask(query, opts);
       return { ...answer, mode: `${answer.mode}+fallback`, httpError: e.message };
