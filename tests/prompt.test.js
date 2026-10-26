@@ -40,7 +40,7 @@ test('arac listesi arama metnine sinav-sorusu olarak girer', () => {
   assert.match(q, /read_file\(path\)/);
   assert.match(q, /write_file\(path,content\)/);
   assert.match(q, /Gorev: "package.json dosyasini oku"/);
-  assert.match(q, /Cevap formati: ARAC: ad \| arg="deger"/);
+  assert.match(q, /Cevap formati: ARAC: read_file \| path="deger"/);
 });
 
 test('kimlik dayatmasi kullanilmaz (AI Mode reddediyor)', () => {
@@ -93,6 +93,19 @@ test('semada olmayan arguman atilir', () => {
   const r = parseProtocol('ARAC: read_file | path="a" | zararli="x"', TOOLS);
   const args = JSON.parse(r.toolCalls[0].function.arguments);
   assert.deepEqual(args, { path: 'a' });
+});
+
+test('tek parametreli araçta uydurma arguman adi ilk anahtara yazilir', () => {
+  // Model "arg" gibi genel bir ad uretirse cagri argumansiz kalmasin
+  const r = parseProtocol('ARAC: read_file | arg="package.json"', TOOLS);
+  const args = JSON.parse(r.toolCalls[0].function.arguments);
+  assert.deepEqual(args, { path: 'package.json' });
+});
+
+test('cevap formati ornegi gercek parametre adini kullanir', () => {
+  const q = buildQuery({ messages: [{ role: 'user', content: 'dosya oku' }], tools: TOOLS });
+  assert.match(q, /ARAC: read_file \| path="deger"/);
+  assert.doesNotMatch(q, /arg="deger"/);
 });
 
 test('JSON tool call blogu de desteklenir (geriye uyum)', () => {

@@ -59,6 +59,22 @@ function toolLine(tools) {
     .join(' ');
 }
 
+/**
+ * Cevap formati ornegi. ONEMLI: gercek parametre adlari kullanilmali.
+ * Genel "arg=\"deger\"" yazildiginda model o metni birebir kopyalayip
+ * "ARAC: read_file | arg=\"package.json\"" uretiyor ve arguman kayboluyor.
+ */
+function argFormat(tools) {
+  const first = (tools || [])
+    .map((t) => (t && (t.function || t)) || {})
+    .find((fn) => fn.name);
+  if (!first) return 'ARAC: ad | parametre="deger"';
+  const props = (first.parameters && first.parameters.properties) || {};
+  const keys = Object.keys(props);
+  if (!keys.length) return `ARAC: ${first.name}`;
+  return `ARAC: ${first.name} | ${keys[0]}="deger"`;
+}
+
 /** Gecmis assistant tool_calls + tool sonuclarini adim listesine cevirir. */
 function collectSteps(msgs, endIdx, validNames) {
   const steps = [];
@@ -146,12 +162,12 @@ function buildQuery({ messages, tools, model }) {
       parts.push('Ajanin simdiye kadarki adimlari:');
       for (const s of steps) parts.push(`  ${s.call} -> ${s.result}`);
       parts.push('Ajanin yazacagi SIRADAKI komut satiri nedir?');
-      parts.push('Sadece su formatta tek satir yaz: ARAC: ad | arg="deger"');
+      parts.push(`Sadece su formatta tek satir yaz: ${argFormat(toolDefs)}`);
       parts.push('Gorev bittiyse tek satir: BITTI: ozet');
       if (lastResult) parts.push(`Son arac sonucu akilda tutulmali: ${lastResult.slice(0, 200)}`);
     } else {
       parts.push('Ajanin yazacagi ilk komut satiri nedir?');
-      parts.push('Cevap formati: ARAC: ad | arg="deger"');
+      parts.push(`Cevap formati: ${argFormat(toolDefs)}`);
     }
 
     return clip(flatten(parts.join('\n')));
@@ -239,13 +255,23 @@ function parseProtocol(text, tools) {
 
   const allowed = defs.get(name);
   const args = {};
+  const unknown = [];
   for (const part of argParts) {
     const m = part.match(/\s*([A-Za-z0-9_]+)\s*=\s*([\s\S]*)$/);
     if (!m) continue;
     const key = m[1].trim();
-    if (allowed.size && !allowed.has(key)) continue; // semada olmayan argumani at
-    let value = m[2].trim().replace(/^["'`]+/, '').replace(/["'`]+$/, '');
+    const value = m[2].trim().replace(/^["'`]+/, '').replace(/["'`]+$/, '');
+    if (allowed.size && !allowed.has(key)) {
+      unknown.push(value);
+      continue;
+    }
     args[key] = value;
+  }
+
+  // Model genel bir ad ("arg") uydurduysa cagri argumansiz kalmasin:
+  // yalnizca HIC gecerli arguman yoksa ve arac tek parametreliyse esle.
+  if (!Object.keys(args).length && allowed.size === 1 && unknown.length) {
+    args[[...allowed][0]] = unknown[unknown.length - 1];
   }
 
   // Komut satirini cevap metninden cikar (kalan aciklama varsa koru)
@@ -328,4 +354,4 @@ function parseToolCalls(text, tools) {
   return parseProtocol(text, tools);
 }
 
-module.exports = { buildQuery, parseToolCalls, parseProtocol, textOf, toolLine };
+module.exports = { buildQuery, parseToolCalls, parseProtocol, textOf, toolLine, argFormat };

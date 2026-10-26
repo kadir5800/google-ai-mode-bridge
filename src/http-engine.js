@@ -235,6 +235,24 @@ class HttpEngine {
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
       .replace(/<!--[\s\S]*?-->/g, ' ');
 
+    // Matematik bloklari: Google sayilari MathML/LaTeX olarak render ediyor ve
+    // AYNI deger dort yerde geciyor (data-xpm-latex, <mn>, <annotation>, SVG).
+    // Etiketler silinince sayi 3-4 kez metne dusuyor ("5.1375.137 5.137").
+    // Bu yuzden matematik bloklarini tek degerle degistiriyoruz.
+    h = h.replace(
+      /<div[^>]*data-xpm-copy-root[^>]*>[\s\S]*?<\/math>[\s\S]*?<\/div>/gi,
+      (block) => {
+        const m =
+          block.match(/data-xpm-latex="([^"]*)"/) ||
+          block.match(/<annotation[^>]*>([\s\S]*?)<\/annotation>/i) ||
+          block.match(/<mn>([\s\S]*?)<\/mn>/i);
+        return m ? ` ${m[1]} ` : ' ';
+      },
+    );
+    // MathML kalanlari (data-xpm-copy-root disinda)
+    h = h.replace(/<math[\s\S]*?<\/math>/gi, ' ');
+    h = h.replace(/<svg[\s\S]*?<\/svg>/gi, ' ');
+
     h = h.replace(/<\/(p|div|li|tr|h[1-6]|blockquote|section|article)>/gi, '\n');
     h = h.replace(/<br\s*\/?>/gi, '\n');
     h = h.replace(/<\/(td|th)>/gi, '\t');
@@ -277,7 +295,8 @@ class HttpEngine {
       if (out[out.length - 1] === l) continue;
       out.push(l);
     }
-    return out.join('\n');
+    // Guvenlik agi: ayni sayinin pes pese tekrari ("5.1375.137 5.137")
+    return out.join('\n').replace(/(\b\d[\d.,]*)(?:\s*\1\b)+/g, '$1');
   }
 
   /** /goto?url=... referanslarini toplar. */
