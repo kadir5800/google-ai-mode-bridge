@@ -169,8 +169,12 @@ class HttpEngine {
             if (!Array.isArray(meta)) continue;
             const [title, desc, , site, , href] = meta;
             if (!title || String(title).length < 3) continue;
+            // Google'in kendi bilgi paneli meta kartlari gercek kaynak degil
+            if (/^Google\s+(Sports|Civics|Finance|Weather|Travel)\s+Data$/i.test(String(title).trim())) continue;
             const url = [href, site].find((u) => typeof u === 'string' && /^https?:\/\//.test(u)) || null;
             if (!url) continue;
+            // support.google.com yardim sayfalari da kullaniciya kaynak olmuyor
+            if (/^https?:\/\/support\.google\.com\/knowledgepanel/i.test(url)) continue;
             const key = `${title}|${url}`;
             if (seen.has(key)) continue;
             seen.add(key);
@@ -328,9 +332,13 @@ class HttpEngine {
     }
     // Guvenlik agi: ayni sayinin pes pese tekrari ("5.1375.137 5.137")
     const joined = out.join('\n').replace(/(\b\d[\d.,]*)(?:\s*\1\b)+/g, '$1');
-    // Etiketler araya girince kesme isaretinden once bosluk kaliyor:
-    // "Türkiye 'nin başkenti Ankara 'dır" -> "Türkiye'nin başkenti Ankara'dır"
-    return joined.replace(/(\S)[ \t]+'(?=[a-zA-Z\u00c0-\u017f])/g, "$1'");
+    // Etiketler araya girince noktalamadan once bosluk kaliyor:
+    //   "Türkiye 'nin" / "Türkiye ’nin" -> "Türkiye'nin"
+    //   "Ankara ," / "Ankara ."          -> "Ankara," / "Ankara."
+    return joined
+      .replace(/(\S)[ \t]+(['\u2019\u02bc])(?=[a-zA-Z\u00c0-\u017f])/g, '$1$2')
+      .replace(/[ \t]+([,;:.!?%)\]])/g, '$1')
+      .replace(/([(\[])[ \t]+/g, '$1');
   }
 
   /** /goto?url=... referanslarini toplar. */

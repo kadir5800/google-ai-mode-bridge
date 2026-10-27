@@ -157,6 +157,32 @@ projeyi günceller. **İşte agent davranışı bu.**
 | `npm run agent -- "görev"` | Kural tabanlı agent döngüsü (dosya araçları) |
 | `npm test` | Birim testleri (ağ gerekmez) |
 | `npm start` | (Opsiyonel) OpenAI uyumlu HTTP endpoint, `:8787` |
+| `npm run serve` | Aynı endpoint + gözcü: süreç ölürse 3 s'de geri gelir |
+
+### Cline / Cursor için köprüyü açık tutma
+
+Cline `ECONNREFUSED 127.0.0.1:8787` alıyorsa sunucu çalışmıyor demektir.
+Terminalde `npm run serve` çalıştır ve **açık bırak**:
+
+```
+npm run serve
+```
+
+Gözcü, sunucuyu alt süreç olarak başlatır; beklenmedik şekilde kapanırsa
+3 saniye içinde yeniden ayağa kaldırır. Terminali kapatırsan köprü de kapanır —
+Cline'ı kullanırken bu terminal açık kalmalı.
+
+Port doluysa (`EADDRINUSE`) köprü zaten çalışıyor olabilir:
+
+```
+curl http://127.0.0.1:8787/health
+```
+
+Başka port kullanmak için:
+
+```
+$env:AIM_PORT = "8788"; npm run serve
+```
 
 ---
 
