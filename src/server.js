@@ -240,6 +240,23 @@ const server = http.createServer(async (req, res) => {
   return json(res, 404, { error: { message: `Bilinmeyen yol: ${url.pathname}`, type: 'not_found' } });
 });
 
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    console.error(
+      `\nPort ${cfg.port} zaten kullaniliyor. Muhtemelen kopru zaten calisiyor.\n` +
+        `  Kontrol: http://${cfg.host}:${cfg.port}/health\n` +
+        `  Farkli port: $env:AIM_PORT = "8788"; npm start\n`,
+    );
+    process.exit(1);
+  }
+  if (e.code === 'EACCES') {
+    console.error(`\nPort ${cfg.port} icin izin yok. AIM_PORT ile baska port sec.\n`);
+    process.exit(1);
+  }
+  console.error('\nSunucu hatasi:', e.message, '\n');
+  process.exit(1);
+});
+
 server.listen(cfg.port, cfg.host, () => {
   const base = `http://${cfg.host}:${cfg.port}`;
   console.log('');

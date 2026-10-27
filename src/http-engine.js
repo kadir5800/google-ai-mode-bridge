@@ -157,16 +157,25 @@ class HttpEngine {
       try {
         const json = m[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#39;/g, "'");
         const arr = JSON.parse(json);
+        // item[1] TEK bir meta dizisi degil, meta dizilerinin LISTESI olabilir:
+        //   [null, [ ["Baslik",...,"https://site",["Kaynak"],"/goto?url=..."] ]]
+        // Eskiden item[1] ile tek meta sanilip dizi elemanlari virgulle
+        // birlestiriliyordu -> baslik favicon URL'siyle birlesiyordu.
         for (const item of arr) {
-          const meta = item && item[1];
-          if (!Array.isArray(meta)) continue;
-          const [title, desc, , site] = meta;
-          if (!title || String(title).length < 3) continue;
-          const url = typeof site === 'string' && /^https?:\/\//.test(site) ? site : null;
-          const key = `${title}|${url || ''}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          sources.push({ title: String(title), url, desc: desc ? String(desc).slice(0, 200) : '' });
+          const raw = item && item[1];
+          if (!Array.isArray(raw)) continue;
+          const metas = Array.isArray(raw[0]) ? raw : [raw];
+          for (const meta of metas) {
+            if (!Array.isArray(meta)) continue;
+            const [title, desc, , site, , href] = meta;
+            if (!title || String(title).length < 3) continue;
+            const url = [href, site].find((u) => typeof u === 'string' && /^https?:\/\//.test(u)) || null;
+            if (!url) continue;
+            const key = `${title}|${url}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            sources.push({ title: String(title), url, desc: desc ? String(desc).slice(0, 200) : '' });
+          }
         }
       } catch {
         /* tek kart hatasi butunu bozmasin */
@@ -186,6 +195,18 @@ class HttpEngine {
     //      b) "... için AI Modu yanıtı" basligi
     //      c) hicbiri yoksa tum govde
     let h2 = h.replace(/<style[\s\S]*?<\/style>/gi, ' ');
+
+    // 3a) Cevap icindeki kaynak atif ciplerini sil.
+    //     Bunlar cumlenin sonuna yapistirilan kucuk balonlar:
+    //       <div class="S9OuHf">...<span class="QNca8b">Wikipedia</span>... </div>
+    //     Etiketler silinince metne "Wikipedia" ve "+1" gibi cop dusuyordu
+    //     ("Ankara'dır. Wikipedia +1"). Cipi, icindeki site adiyla birlikte at.
+    h2 = h2.replace(
+      /<div[^>]*class="[^"]*\bS9OuHf\b[^"]*"[^>]*>[\s\S]*?<\/div>/gi,
+      ' ',
+    );
+    // Cipin disinda kalan tek basina "+1" / "+2" sayaclari
+    h2 = h2.replace(/<\/span>\s*\+\d+/g, ' </span>');
 
     const paraIdx = h2.search(/class="n6owBd\b/);
     const titleIdx = h2.search(/AI Modu yan\u0131t\u0131/i);
@@ -288,6 +309,15 @@ class HttpEngine {
       /^K\u00f6t\u00fc yan\u0131t$/i,
       /^Show more$/i,
       /^Wikipedia$|^Onedio$|^YouTube$/i,
+      // Harita / gorsel yerlesim arayuzu
+      /^Haritay\u0131 geni\u015flet$/i,
+      /^Haritay\u0131 k\u00fc\u00e7\u00fclt$/i,
+      /^Yak\u0131nla\u015ft\u0131r$/i,
+      /^Uzakla\u015ft\u0131r$/i,
+      /^Haritada g\u00f6ster$/i,
+      /^Sokak g\u00f6r\u00fcn\u00fcm\u00fc$/i,
+      /^Tam ekran$/i,
+      /^Kaynaklar\u0131 g\u00f6ster$/i,
     ];
 
     const out = [];
@@ -297,7 +327,10 @@ class HttpEngine {
       out.push(l);
     }
     // Guvenlik agi: ayni sayinin pes pese tekrari ("5.1375.137 5.137")
-    return out.join('\n').replace(/(\b\d[\d.,]*)(?:\s*\1\b)+/g, '$1');
+    const joined = out.join('\n').replace(/(\b\d[\d.,]*)(?:\s*\1\b)+/g, '$1');
+    // Etiketler araya girince kesme isaretinden once bosluk kaliyor:
+    // "Türkiye 'nin başkenti Ankara 'dır" -> "Türkiye'nin başkenti Ankara'dır"
+    return joined.replace(/(\S)[ \t]+'(?=[a-zA-Z\u00c0-\u017f])/g, "$1'");
   }
 
   /** /goto?url=... referanslarini toplar. */
